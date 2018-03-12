@@ -1,0 +1,302 @@
+/*
+ * To change this license header, choose License Headers in Project Properties.
+ * To change this template file, choose Tools | Templates
+ * and open the template in the editor.
+ */
+package Controle;
+
+import Modelo.ModArquiConfiguracao;
+import Modelo.ModFilialCaixa;
+import Modelo.ModHost;
+import Visao.ArquivoConfiguracao;
+import com.jcraft.jsch.Channel;
+import com.jcraft.jsch.JSch;
+import com.jcraft.jsch.Session;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.net.InetAddress;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import org.apache.commons.lang3.StringUtils;
+
+/**
+ *
+ * @author jaguar
+ */
+public class ConArqConfiguracao extends Thread {
+
+    ModFilialCaixa modfi;
+    ModArquiConfiguracao modArq;
+    
+    String user = "root";
+    String passwd = "123456";
+    String endString = "trado";
+    
+    //LINUX
+    ModHost host;
+    String path = "/ecf2000_solicita/";
+    String config = ""+path+"config/host.cfg";
+    String transmite = ""+path+"transmite/";
+    String caminhoArquivo = "/ecf2000_solicita/config/host.cfg";
+     
+    //Windows
+    /*ModHost host;
+    String path = "\\ecf2000_solicita\\";
+    String config = "" + path + "\\config\\host.cfg";
+    String transmite = "" + path + "transmite\\";
+    */
+    ArrayList<ModFilialCaixa> fiCa;
+    String rede;
+    ArquivoConfiguracao arqConfig;
+    public ConArqConfiguracao() {
+        modfi = new ModFilialCaixa();
+        modArq = new ModArquiConfiguracao();
+        fiCa = new ArrayList<ModFilialCaixa>();
+        rede = "";
+        //arqConfig = new ArquivoConfiguracao();
+    }
+
+    public String getUser() {
+        return user;
+    }
+
+    public void setUser(String user) {
+        this.user = user;
+    }
+
+    public String getPasswd() {
+        return passwd;
+    }
+
+    public void setPasswd(String passwd) {
+        this.passwd = passwd;
+    }
+    
+    
+    public ArrayList<ModFilialCaixa> criaModeloFilialCaixa(int filial, int caixa, boolean local) {
+        ArrayList<ModFilialCaixa> filialCaixa = new ArrayList<ModFilialCaixa>();
+        int n = 1;
+        int filialAux;
+        int caixaAux = 1;
+        
+        if (local)
+            filialAux = 0;
+        else 
+            filialAux = 1;
+
+        for (; filialAux <= filial; filialAux++) {
+            for (caixaAux = 1; caixaAux <= caixa; caixaAux++) {
+                modfi = new ModFilialCaixa();
+                modfi.setFilial(String.valueOf(filialAux));
+                modfi.setCaixa(String.valueOf(caixaAux));
+                filialCaixa.add(modfi);
+            }
+        }
+        return filialCaixa;
+    }
+    
+    public void listConeccao(ArrayList<ModFilialCaixa> fiCa, String rede, ArquivoConfiguracao arqConfig) {
+        this.fiCa = fiCa;
+        this.rede = rede;
+        this.arqConfig = arqConfig;
+    }
+    
+    public void run () {
+        ArrayList<ModArquiConfiguracao> arrayConfi = new ArrayList<ModArquiConfiguracao>();
+        //System.out.println(fiCa.size());
+        for (int i = 0; i < fiCa.size(); i++) {
+            String ip = rede + "." + fiCa.get(i).getFilial() + "." + fiCa.get(i).getCaixa();
+            
+            arqConfig.setArea_configuracao("Pingando IP: "+ ip +"\n");
+            
+            boolean conect = false;
+            try {
+                if (InetAddress.getByName(ip).isReachable(10000)) {
+                    conect = true;
+                } else {
+                    conect = false;
+                    arqConfig.setArea_configuracao("Sem comunicacao IP: "+ ip +"\n");
+                }
+            } catch (Exception e) {
+                System.out.println("Ping falhou...");
+            }
+
+            if (conect) {
+                try {
+                    
+                    arqConfig.setArea_configuracao("Conectando IP: " + ip + "\n");
+                    
+                    JSch jsch = new JSch();
+                    Session session = jsch.getSession(this.user, ip, 22);
+                    session.setPassword(this.passwd);
+                    session.setConfig("StrictHostKeyChecking", "no");
+                    session.connect();
+                    
+                    Channel channel = session.openChannel("shell");
+                    channel.connect();
+                    
+                    DataInputStream dataIn = new DataInputStream(channel.getInputStream());
+                    DataOutputStream dataOut = new DataOutputStream(channel.getOutputStream());
+                   
+                    dataOut.writeBytes("cat /ecf2000/recebe/noar.txt\r\n");
+                    dataOut.flush();
+                    
+                    String line = dataIn.readLine();
+                   
+                    while (!line.endsWith(this.endString) || !line.endsWith("ectory")) {
+                       
+                        String linha[] = line.split("-");
+                        if (linha.length > 6) {
+                          
+                            modArq = new ModArquiConfiguracao();
+                            for (int j = 0; j < linha.length; j++) {
+                                switch (j) {
+                                    case 0:
+                                        modArq.setNumFilial(linha[j]);
+                                        break;
+                                    case 1:
+                                        modArq.setNumCaixa(linha[j]);
+                                        break;
+                                    case 5:
+                                        modArq.setNumIp(linha[j]);
+                                        break;
+                                    case 7:
+                                        modArq.setNumImpressora(linha[j]);
+                                        break;
+                                }
+                            }
+                          
+                            arrayConfi.add(modArq);
+                            break;
+                        }
+                    
+                        line = dataIn.readLine();
+                    }
+                   
+                    dataIn.close();
+                    dataOut.close();
+                    channel.disconnect();
+                    session.disconnect();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+   
+        }
+        
+        try {
+            MontaArqConfiguracao(arrayConfi);
+        } catch (IOException ex) {
+            Logger.getLogger(ConArqConfiguracao.class.getName()).log(Level.SEVERE, null, ex);
+        }
+    }
+    
+    private void MontaArqConfiguracao(ArrayList<ModArquiConfiguracao> modArq) throws IOException {
+        ArrayList<ModArquiConfiguracao> confAtual = new ArrayList<ModArquiConfiguracao>();
+        confAtual = lerArquivo();
+        
+        if (confAtual.size() > 0) {
+            atualizaConfig(confAtual, modArq);
+        } else {
+            insereInfo(modArq);
+        }
+    }
+    
+    private ArrayList<ModArquiConfiguracao> lerArquivo() {
+        ArrayList<ModArquiConfiguracao> info = new ArrayList<ModArquiConfiguracao>();
+        
+        Path path = Paths.get(this.caminhoArquivo);
+        Charset utf8 = StandardCharsets.UTF_8;
+        
+        //Verifica se o arquivo host.cfg existe.
+        if (Files.isReadable(path)) {
+            /*
+            Caso o arquivo exista, as informações serão inseridas na variavel
+            info
+            */ 
+            try(BufferedReader reader = Files.newBufferedReader(path, utf8)) {
+                String line = null;
+                while ((line = reader.readLine()) != null) {
+                    String aux[] = line.split(";");
+                    ModArquiConfiguracao modArqi = new ModArquiConfiguracao();
+                    modArqi.setNumFilial(aux[0]);
+                    modArqi.setNumCaixa(aux[1]);
+                    modArqi.setNumIp(aux[2]);
+                    modArqi.setNumImpressora(aux[3]);
+                    
+                    info.add(modArqi);
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        } else {
+            /*
+            Caso o arquivo não exista, ele sera criado.
+            */
+            try {
+                Files.createFile(path);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+        return info;
+    }
+    
+    private void atualizaConfig(ArrayList<ModArquiConfiguracao> confAtual, ArrayList<ModArquiConfiguracao> modArq) {
+        boolean novoIp = true;
+        for (int i=0; i < modArq.size(); i++) {
+            novoIp = true;
+            for  (int j=0; j< confAtual.size(); j++) {
+                if(modArq.get(i).getNumIp().equals(confAtual.get(j).getNumIp())){
+                    confAtual.get(j).setNumCaixa(modArq.get(i).getNumCaixa());
+                    confAtual.get(j).setNumFilial(modArq.get(i).getNumFilial());
+                    confAtual.get(j).setNumImpressora(modArq.get(i).getNumImpressora());
+                    confAtual.get(j).setNumIp(modArq.get(i).getNumIp());
+                    novoIp = false;
+                }
+            }
+            
+            if (novoIp) {
+                confAtual.add(modArq.get(i));
+            }
+        }
+        
+        insereInfo(confAtual);
+    }
+
+    private void insereInfo(ArrayList<ModArquiConfiguracao> modArq) {
+        Path path = Paths.get("/ecf2000_solicita/config/host.cfg");
+        Charset utf8 = StandardCharsets.UTF_8;
+        String linha = "";
+       
+        arqConfig.setArea_configuracao("Criando o arquivo de configuração.\nAguarde...\n");
+        
+        try (BufferedWriter whiter = Files.newBufferedWriter(path, utf8)) {
+            for (int i = 0; i < modArq.size(); i++) {
+                String filial = StringUtils.leftPad(modArq.get(i).getNumFilial(), 3, '0');
+                String caixa = StringUtils.leftPad(modArq.get(i).getNumCaixa(), 2, '0');
+                String ip = modArq.get(i).getNumIp();
+                String impressora = modArq.get(i).getNumImpressora();
+                
+                linha = filial + ";" + caixa + ";" + ip + ";" + impressora + "\n";
+                whiter.write(linha);
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        
+        arqConfig.setArea_configuracao("Fim do programa.\nArquivo criado com sucesso!!!\n");
+    }
+}
